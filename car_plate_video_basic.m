@@ -9,38 +9,55 @@ close all;
 
 videoPath = 'car_video.mp4';   % Change this to your video file
 frameStep = 5;                 % Process every 5th frame
+outputVideoPath = 'annotated_car_video.mp4';
 
 if ~isfile(videoPath)
     error('Video file not found: %s', videoPath);
 end
 
 videoReader = VideoReader(videoPath);
+videoWriter = VideoWriter(outputVideoPath, 'MPEG-4');
+videoWriter.FrameRate = videoReader.FrameRate;
+open(videoWriter);
+
 frameIndex = 0;
 results = struct('frame', {}, 'text', {}, 'score', {}, 'crop', {});
 
 while hasFrame(videoReader)
     frame = readFrame(videoReader);
     frameIndex = frameIndex + 1;
+    outputFrame = frame;
 
     if mod(frameIndex - 1, frameStep) ~= 0
+        writeVideo(videoWriter, outputFrame);
         continue;
     end
 
     fprintf('Processing frame %d\n', frameIndex);
 
     try
-        [foundPlate, bestText, bestScore, bestCrop] = detectPlateInFrame(frame);
+        [foundPlate, bestText, bestScore, bestCrop, bestBox] = detectPlateInFrame(frame);
         if foundPlate
             resultIndex = numel(results) + 1;
             results(resultIndex).frame = frameIndex;
             results(resultIndex).text = bestText;
             results(resultIndex).score = bestScore;
             results(resultIndex).crop = bestCrop;
+
+            outputFrame = insertShape(outputFrame, 'Rectangle', bestBox, ...
+                'Color', 'green', 'LineWidth', 3);
+            labelPosition = [bestBox(1), max(1, bestBox(2) - 28)];
+            outputFrame = insertText(outputFrame, labelPosition, bestText, ...
+                'BoxColor', 'yellow', 'TextColor', 'black', 'FontSize', 18);
         end
     catch ME
         fprintf('Frame %d failed: %s\n', frameIndex, ME.message);
     end
+
+    writeVideo(videoWriter, outputFrame);
 end
+
+close(videoWriter);
 
 if isempty(results)
     disp('No valid plate was detected in the video.');
@@ -69,18 +86,21 @@ else
     disp('==============================');
     disp('Final detected plate text from video:');
     disp(finalText);
+    disp(['Annotated video saved to: ' outputVideoPath]);
     disp('==============================');
 end
 
 
-function [foundPlate, bestText, bestScore, bestCrop] = detectPlateInFrame(I)
+function [foundPlate, bestText, bestScore, bestCrop, bestBoxOriginal] = detectPlateInFrame(I)
     if size(I,3) == 3
         gray = rgb2gray(I);
     else
         gray = I;
     end
 
+    resizeFactor = 1;
     if min(size(gray, 1), size(gray, 2)) < 260
+        resizeFactor = 2;
         I = imresize(I, 2);
         gray = imresize(gray, 2);
     end
@@ -108,6 +128,7 @@ function [foundPlate, bestText, bestScore, bestCrop] = detectPlateInFrame(I)
     bestScore = -inf;
     bestCrop = [];
     bestText = '';
+    bestBoxOriginal = [0 0 0 0];
     foundPlate = false;
 
     for k = 1:size(groupedBoxes, 1)
@@ -193,6 +214,7 @@ function [foundPlate, bestText, bestScore, bestCrop] = detectPlateInFrame(I)
             bestScore = totalScore;
             bestText = cleanText;
             bestCrop = crop;
+            bestBoxOriginal = round([x1, y1, x2 - x1, y2 - y1] / resizeFactor);
             foundPlate = true;
         end
     end
