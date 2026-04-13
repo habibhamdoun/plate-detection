@@ -64,6 +64,7 @@ for imageIndex = 1:numel(imageFiles)
     bestCrop = [];
     bestText = '';
     bestPlateGray = [];
+    bestPlateStyle = '';
     foundPlate = false;
 
     % Uncomment this whole figure block when you want to inspect the pipeline.
@@ -190,6 +191,7 @@ for imageIndex = 1:numel(imageFiles)
                 bestCrop = crop;
                 bestText = cleanText;
                 bestPlateGray = bestOcrPreview;
+                bestPlateStyle = guessPlateStyle(crop, cleanText);
                 foundPlate = true;
             end
         catch ME
@@ -226,10 +228,12 @@ for imageIndex = 1:numel(imageFiles)
         axis off;
         text(0.05, 0.60, 'Detected Text:', 'FontSize', 14, 'FontWeight', 'bold');
         text(0.05, 0.40, bestText, 'FontSize', 22, 'Color', [0 0.35 0.8]);
+        text(0.05, 0.20, ['Style Guess: ' bestPlateStyle], 'FontSize', 13, 'Color', [0.2 0.2 0.2]);
 
         disp('==============================');
         disp(['Final detected plate text for ' imageFiles(imageIndex).name ':']);
         disp(bestText);
+        disp(['Plate style guess: ' bestPlateStyle]);
         disp('==============================');
     else
         disp(['No valid plate candidate found for ' imageFiles(imageIndex).name '.']);
@@ -238,119 +242,164 @@ end
 
 
 function textBlobBoxes = findTextBlobs(BW, grayImage)
-stats = regionprops(BW, 'BoundingBox', 'Area', 'Extent', 'Solidity', 'Eccentricity');
-textBlobBoxes = [];
-imageArea = numel(BW);
+    stats = regionprops(BW, 'BoundingBox', 'Area', 'Extent', 'Solidity', 'Eccentricity');
+    textBlobBoxes = [];
+    imageArea = numel(BW);
 
-for k = 1:numel(stats)
-    box = stats(k).BoundingBox;
-    width = box(3);
-    height = box(4);
-    aspectRatio = width / max(height, 1);
-    relativeArea = stats(k).Area / imageArea;
+    for k = 1:numel(stats)
+        box = stats(k).BoundingBox;
+        width = box(3);
+        height = box(4);
+        aspectRatio = width / max(height, 1);
+        relativeArea = stats(k).Area / imageArea;
 
-    if relativeArea < 0.00002 || relativeArea > 0.01
-        continue;
-    end
-    if height < 8 || width < 2
-        continue;
-    end
-    if aspectRatio < 0.08 || aspectRatio > 1.2
-        continue;
-    end
-    if stats(k).Extent < 0.15 || stats(k).Extent > 0.95
-        continue;
-    end
-    if stats(k).Solidity < 0.15
-        continue;
-    end
-    if stats(k).Eccentricity > 0.995
-        continue;
-    end
+        if relativeArea < 0.00002 || relativeArea > 0.01
+            continue;
+        end
+        if height < 8 || width < 2
+            continue;
+        end
+        if aspectRatio < 0.08 || aspectRatio > 1.2
+            continue;
+        end
+        if stats(k).Extent < 0.15 || stats(k).Extent > 0.95
+            continue;
+        end
+        if stats(k).Solidity < 0.15
+            continue;
+        end
+        if stats(k).Eccentricity > 0.995
+            continue;
+        end
 
-    x1 = max(1, floor(box(1)));
-    y1 = max(1, floor(box(2)));
-    x2 = min(size(grayImage, 2), ceil(box(1) + box(3)));
-    y2 = min(size(grayImage, 1), ceil(box(2) + box(4)));
-    textBlobBoxes = [textBlobBoxes; x1, y1, x2 - x1, y2 - y1]; %#ok<AGROW>
-end
+        x1 = max(1, floor(box(1)));
+        y1 = max(1, floor(box(2)));
+        x2 = min(size(grayImage, 2), ceil(box(1) + box(3)));
+        y2 = min(size(grayImage, 1), ceil(box(2) + box(4)));
+        textBlobBoxes = [textBlobBoxes; x1, y1, x2 - x1, y2 - y1]; %#ok<AGROW>
+    end
 end
 
 
 function groupedBoxes = groupTextBlobs(textBlobBoxes, imageSize)
-groupedBoxes = [];
-if isempty(textBlobBoxes)
-    return;
-end
-
-centersY = textBlobBoxes(:, 2) + textBlobBoxes(:, 4) / 2;
-heights = textBlobBoxes(:, 4);
-
-for i = 1:size(textBlobBoxes, 1)
-    refCenterY = centersY(i);
-    refHeight = heights(i);
-
-    similarRows = abs(centersY - refCenterY) < max(8, 0.6 * refHeight);
-    similarHeights = heights > 0.5 * refHeight & heights < 1.8 * refHeight;
-    idx = find(similarRows & similarHeights);
-
-    if numel(idx) < 4
-        continue;
+    groupedBoxes = [];
+    if isempty(textBlobBoxes)
+        return;
     end
 
-    selected = textBlobBoxes(idx, :);
-    x1 = min(selected(:, 1));
-    y1 = min(selected(:, 2));
-    x2 = max(selected(:, 1) + selected(:, 3));
-    y2 = max(selected(:, 2) + selected(:, 4));
-    width = x2 - x1;
-    height = y2 - y1;
-    aspectRatio = width / max(height, 1);
+    centersY = textBlobBoxes(:, 2) + textBlobBoxes(:, 4) / 2;
+    heights = textBlobBoxes(:, 4);
 
-    if aspectRatio < 2.0 || aspectRatio > 8.5
-        continue;
+    for i = 1:size(textBlobBoxes, 1)
+        refCenterY = centersY(i);
+        refHeight = heights(i);
+
+        similarRows = abs(centersY - refCenterY) < max(8, 0.6 * refHeight);
+        similarHeights = heights > 0.5 * refHeight & heights < 1.8 * refHeight;
+        idx = find(similarRows & similarHeights);
+
+        if numel(idx) < 4
+            continue;
+        end
+
+        selected = textBlobBoxes(idx, :);
+        x1 = min(selected(:, 1));
+        y1 = min(selected(:, 2));
+        x2 = max(selected(:, 1) + selected(:, 3));
+        y2 = max(selected(:, 2) + selected(:, 4));
+        width = x2 - x1;
+        height = y2 - y1;
+        aspectRatio = width / max(height, 1);
+
+        if aspectRatio < 2.0 || aspectRatio > 8.5
+            continue;
+        end
+        if width < 30 || height < 10
+            continue;
+        end
+
+        padX = round(0.10 * width);
+        padY = round(0.25 * height);
+        x1 = max(1, x1 - padX);
+        y1 = max(1, y1 - padY);
+        x2 = min(imageSize(2), x2 + padX);
+        y2 = min(imageSize(1), y2 + padY);
+
+        rowSpread = std(double(centersY(idx))) / max(imageSize(1), 1);
+        alignmentScore = max(0, 1 - 4 * rowSpread);
+        groupScore = 2.5 * min(numel(idx), 8) + 8 * alignmentScore;
+
+        groupedBoxes = [groupedBoxes; x1, y1, x2 - x1, y2 - y1, groupScore]; %#ok<AGROW>
     end
-    if width < 30 || height < 10
-        continue;
+
+    if ~isempty(groupedBoxes)
+        groupedBoxes = unique(round(groupedBoxes), 'rows', 'stable');
+        groupedBoxes = sortrows(groupedBoxes, 5, 'descend');
+        groupedBoxes = groupedBoxes(1:min(10, size(groupedBoxes, 1)), :);
     end
-
-    padX = round(0.10 * width);
-    padY = round(0.25 * height);
-    x1 = max(1, x1 - padX);
-    y1 = max(1, y1 - padY);
-    x2 = min(imageSize(2), x2 + padX);
-    y2 = min(imageSize(1), y2 + padY);
-
-    rowSpread = std(double(centersY(idx))) / max(imageSize(1), 1);
-    alignmentScore = max(0, 1 - 4 * rowSpread);
-    groupScore = 2.5 * min(numel(idx), 8) + 8 * alignmentScore;
-
-    groupedBoxes = [groupedBoxes; x1, y1, x2 - x1, y2 - y1, groupScore]; %#ok<AGROW>
-end
-
-if ~isempty(groupedBoxes)
-    groupedBoxes = unique(round(groupedBoxes), 'rows', 'stable');
-    groupedBoxes = sortrows(groupedBoxes, 5, 'descend');
-    groupedBoxes = groupedBoxes(1:min(10, size(groupedBoxes, 1)), :);
-end
 end
 
 
 function textScore = scoreDetectedText(cleanText, confidence)
-if isnan(confidence)
-    confidence = 0;
+    if isnan(confidence)
+        confidence = 0;
+    end
+
+    textLen = length(cleanText);
+    hasLetter = ~isempty(regexp(cleanText, '[A-Z]', 'once'));
+    hasDigit = ~isempty(regexp(cleanText, '[0-9]', 'once'));
+
+    textScore = 0;
+    textScore = textScore + 0.08 * min(textLen, 10);
+    textScore = textScore + 0.02 * max(confidence, 0);
+    textScore = textScore + 0.2 * double(hasLetter);
+    textScore = textScore + 0.2 * double(hasDigit);
+    if textLen >= 5 && textLen <= 8
+        textScore = textScore + 0.5;
+    end
 end
 
-textLen = length(cleanText);
-hasLetter = ~isempty(regexp(cleanText, '[A-Z]', 'once'));
-hasDigit = ~isempty(regexp(cleanText, '[0-9]', 'once'));
 
-textScore = 0;
-textScore = textScore + 0.08 * min(textLen, 10);
-textScore = textScore + 0.02 * max(confidence, 0);
-textScore = textScore + 0.2 * double(hasLetter);
-textScore = textScore + 0.2 * double(hasDigit);
-if textLen >= 5 && textLen <= 8
-    textScore = textScore + 0.5;
-end
+function plateStyle = guessPlateStyle(crop, cleanText)
+    if size(crop, 3) == 3
+        hsvCrop = rgb2hsv(crop);
+        meanValue = mean(hsvCrop(:,:,3), 'all');
+        meanSaturation = mean(hsvCrop(:,:,2), 'all');
+        hue = hsvCrop(:,:,1);
+        blueMask = ((hue > 0.52 & hue < 0.72) & hsvCrop(:,:,2) > 0.25);
+        yellowMask = ((hue > 0.10 & hue < 0.18) & hsvCrop(:,:,2) > 0.20);
+        blueRatio = mean(blueMask(:));
+        yellowRatio = mean(yellowMask(:));
+    else
+        meanValue = mean(crop(:)) / 255;
+        meanSaturation = 0;
+        blueRatio = 0;
+        yellowRatio = 0;
+    end
+
+    textLen = length(cleanText);
+    lettersCount = length(regexp(cleanText, '[A-Z]', 'match'));
+    digitsCount = length(regexp(cleanText, '[0-9]', 'match'));
+
+    if blueRatio > 0.08
+        colorStyle = 'Blue-banded plate style';
+    elseif yellowRatio > 0.20
+        colorStyle = 'Yellow plate style';
+    elseif meanValue > 0.55 && meanSaturation < 0.35
+        colorStyle = 'White plate style';
+    else
+        colorStyle = 'Dark or mixed plate style';
+    end
+
+    if textLen >= 6 && textLen <= 8 && lettersCount >= 2 && digitsCount >= 2
+        patternStyle = 'private-car pattern';
+    elseif digitsCount >= max(4, lettersCount) && textLen >= 5
+        patternStyle = 'number-heavy pattern';
+    elseif lettersCount >= digitsCount && textLen >= 4
+        patternStyle = 'letter-heavy pattern';
+    else
+        patternStyle = 'unknown pattern';
+    end
+
+    plateStyle = [colorStyle ' | ' patternStyle];
 end
