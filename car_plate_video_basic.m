@@ -21,7 +21,7 @@ videoWriter.FrameRate = videoReader.FrameRate;
 open(videoWriter);
 
 frameIndex = 0;
-results = struct('frame', {}, 'text', {}, 'score', {}, 'crop', {}, 'style', {});
+results = struct('frame', {}, 'text', {}, 'score', {}, 'crop', {});
 
 while hasFrame(videoReader)
     frame = readFrame(videoReader);
@@ -36,19 +36,18 @@ while hasFrame(videoReader)
     fprintf('Processing frame %d\n', frameIndex);
 
     try
-        [foundPlate, bestText, bestScore, bestCrop, bestBox, bestStyle] = detectPlateInFrame(frame);
+        [foundPlate, bestText, bestScore, bestCrop, bestBox] = detectPlateInFrame(frame);
         if foundPlate
             resultIndex = numel(results) + 1;
             results(resultIndex).frame = frameIndex;
             results(resultIndex).text = bestText;
             results(resultIndex).score = bestScore;
             results(resultIndex).crop = bestCrop;
-            results(resultIndex).style = bestStyle;
 
             outputFrame = insertShape(outputFrame, 'Rectangle', bestBox, ...
                 'Color', 'green', 'LineWidth', 3);
             labelPosition = [bestBox(1), max(1, bestBox(2) - 28)];
-            outputFrame = insertText(outputFrame, labelPosition, [bestText ' | ' bestStyle], ...
+            outputFrame = insertText(outputFrame, labelPosition, bestText, ...
                 'BoxColor', 'yellow', 'TextColor', 'black', 'FontSize', 18);
         end
     catch ME
@@ -82,19 +81,17 @@ else
     axis off;
     text(0.05, 0.65, 'Most Frequent Plate:', 'FontSize', 14, 'FontWeight', 'bold');
     text(0.05, 0.45, finalText, 'FontSize', 24, 'Color', [0 0.35 0.8]);
-    text(0.05, 0.25, ['Style Guess: ' bestResult.style], 'FontSize', 12);
-    text(0.05, 0.12, sprintf('Seen in %d sampled frames', counts(bestId)), 'FontSize', 12);
+    text(0.05, 0.18, sprintf('Seen in %d sampled frames', counts(bestId)), 'FontSize', 12);
 
     disp('==============================');
     disp('Final detected plate text from video:');
     disp(finalText);
-    disp(['Plate style guess: ' bestResult.style]);
     disp(['Annotated video saved to: ' outputVideoPath]);
     disp('==============================');
 end
 
 
-function [foundPlate, bestText, bestScore, bestCrop, bestBoxOriginal, bestStyle] = detectPlateInFrame(I)
+function [foundPlate, bestText, bestScore, bestCrop, bestBoxOriginal] = detectPlateInFrame(I)
     if size(I,3) == 3
         gray = rgb2gray(I);
     else
@@ -132,7 +129,6 @@ function [foundPlate, bestText, bestScore, bestCrop, bestBoxOriginal, bestStyle]
     bestCrop = [];
     bestText = '';
     bestBoxOriginal = [0 0 0 0];
-    bestStyle = '';
     foundPlate = false;
 
     for k = 1:size(groupedBoxes, 1)
@@ -219,7 +215,6 @@ function [foundPlate, bestText, bestScore, bestCrop, bestBoxOriginal, bestStyle]
             bestText = cleanText;
             bestCrop = crop;
             bestBoxOriginal = round([x1, y1, x2 - x1, y2 - y1] / resizeFactor);
-            bestStyle = guessPlateStyle(crop, cleanText);
             foundPlate = true;
         end
     end
@@ -344,47 +339,3 @@ function textScore = scoreDetectedText(cleanText, confidence)
     end
 end
 
-
-function plateStyle = guessPlateStyle(crop, cleanText)
-    if size(crop, 3) == 3
-        hsvCrop = rgb2hsv(crop);
-        meanValue = mean(hsvCrop(:,:,3), 'all');
-        meanSaturation = mean(hsvCrop(:,:,2), 'all');
-        hue = hsvCrop(:,:,1);
-        blueMask = ((hue > 0.52 & hue < 0.72) & hsvCrop(:,:,2) > 0.25);
-        yellowMask = ((hue > 0.10 & hue < 0.18) & hsvCrop(:,:,2) > 0.20);
-        blueRatio = mean(blueMask(:));
-        yellowRatio = mean(yellowMask(:));
-    else
-        meanValue = mean(crop(:)) / 255;
-        meanSaturation = 0;
-        blueRatio = 0;
-        yellowRatio = 0;
-    end
-
-    textLen = length(cleanText);
-    lettersCount = length(regexp(cleanText, '[A-Z]', 'match'));
-    digitsCount = length(regexp(cleanText, '[0-9]', 'match'));
-
-    if blueRatio > 0.08
-        colorStyle = 'Blue-banded';
-    elseif yellowRatio > 0.20
-        colorStyle = 'Yellow';
-    elseif meanValue > 0.55 && meanSaturation < 0.35
-        colorStyle = 'White';
-    else
-        colorStyle = 'Dark or mixed';
-    end
-
-    if textLen >= 6 && textLen <= 8 && lettersCount >= 2 && digitsCount >= 2
-        patternStyle = 'private pattern';
-    elseif digitsCount >= max(4, lettersCount) && textLen >= 5
-        patternStyle = 'number-heavy';
-    elseif lettersCount >= digitsCount && textLen >= 4
-        patternStyle = 'letter-heavy';
-    else
-        patternStyle = 'unknown pattern';
-    end
-
-    plateStyle = [colorStyle ' | ' patternStyle];
-end
